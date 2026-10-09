@@ -35,28 +35,13 @@ mkdir -p "$WORK"
 APK_NAME="photocraft-android-$VERSION.apk"
 FINAL_APK="$DIST/$APK_NAME"
 
-if command -v cargo-apk >/dev/null 2>&1; then
-  echo "Attempting build via cargo-apk..."
-  FLAGS=()
-  if [ "$BUILD_MODE" = "release" ]; then
-    FLAGS+=(--release)
-  fi
-  if (cd "$ROOT" && cargo apk build "${FLAGS[@]}" --manifest-path "apps/photocraft-android/Cargo.toml"); then
-    FOUND_APK="$(find "$CARGO_TARGET_DIR" -name "*.apk" | head -n 1)"
-    if [ -n "$FOUND_APK" ] && [ -f "$FOUND_APK" ]; then
-      cp "$FOUND_APK" "$FINAL_APK"
-    fi
-  else
-    echo "cargo-apk build not completed, falling back to cargo-ndk..."
-  fi
-fi
+GRADLE_DIR="$HERE/gradle"
+JNILIBS_DIR="$GRADLE_DIR/app/src/main/jniLibs"
+mkdir -p "$JNILIBS_DIR"
 
-if [ ! -f "$FINAL_APK" ] && command -v cargo-ndk >/dev/null 2>&1; then
-  echo "Using cargo-ndk + Gradle build pipeline..."
-  GRADLE_DIR="$HERE/gradle"
-  JNILIBS_DIR="$GRADLE_DIR/app/src/main/jniLibs"
-  mkdir -p "$JNILIBS_DIR"
-
+# 1. Compile native libraries via cargo-ndk
+if command -v cargo-ndk >/dev/null 2>&1; then
+  echo "Compiling native libraries using cargo-ndk..."
   TARGETS=("aarch64-linux-android" "x86_64-linux-android")
   CARGO_FLAGS=()
   if [ "$BUILD_MODE" = "release" ]; then
@@ -71,31 +56,58 @@ if [ ! -f "$FINAL_APK" ] && command -v cargo-ndk >/dev/null 2>&1; then
       warn "Rust target $tgt is not installed, skipping"
     fi
   done
+fi
 
-  if [ -x "$GRADLE_DIR/gradlew" ]; then
-    GRADLE_TASK="assembleDebug"
-    if [ "$BUILD_MODE" = "release" ]; then
-      GRADLE_TASK="assembleRelease"
-    fi
-    (cd "$GRADLE_DIR" && ./gradlew "$GRADLE_TASK")
-    GRADLE_APK="$(find "$GRADLE_DIR/app/build/outputs/apk" -name "*.apk" | head -n 1)"
-    if [ -n "$GRADLE_APK" ] && [ -f "$GRADLE_APK" ]; then
-      cp "$GRADLE_APK" "$FINAL_APK"
-    fi
+# 2. Package APK using Gradle (primary pipeline)
+GRADLE_CMD=""
+if [ -x "$GRADLE_DIR/gradlew" ]; then
+  GRADLE_CMD="./gradlew"
+elif command -v gradle >/dev/null 2>&1; then
+  GRADLE_CMD="gradle"
+fi
+
+if [ -n "$GRADLE_CMD" ]; then
+  echo "Building APK with Gradle ($GRADLE_CMD)..."
+  GRADLE_TASK="assembleDebug"
+  if [ "$BUILD_MODE" = "release" ]; then
+    GRADLE_TASK="assembleRelease"
+  fi
+  (cd "$GRADLE_DIR" && $GRADLE_CMD "$GRADLE_TASK" --no-daemon)
+  GRADLE_APK="$(find "$GRADLE_DIR/app/build/outputs/apk" -name "*.apk" | head -n 1)"
+  if [ -n "$GRADLE_APK" ] && [ -f "$GRADLE_APK" ]; then
+    echo "Found Gradle APK: $GRADLE_APK"
+    cp "$GRADLE_APK" "$FINAL_APK"
   fi
 fi
 
-if [ ! -f "$FINAL_APK" ]; then
-  echo "Bundling standalone package..."
-  copy_docs "$WORK"
-  for abi_target in aarch64-linux-android x86_64-linux-android armv7-linux-androideabi; do
-    SO_FILE="$CARGO_TARGET_DIR/$abi_target/$BUILD_MODE/libphotocraft_android.so"
-    if [ -f "$SO_FILE" ]; then
-      mkdir -p "$WORK/lib/$abi_target"
-      cp "$SO_FILE" "$WORK/lib/$abi_target/"
+# 3. Fallback: package APK using Android SDK build-tools (aapt2) if Gradle was not available
+SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+BUILD_TOOLS_DIR=""
+if [ -n "$SDK_ROOT" ] && [ -d "$SDK_ROOT/build-tools" ]; then
+  BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)"
+fi
+
+if [ ! -f "$FINAL_APK" ] && [ -n "$SDK_ROOT" ] && [ -n "$BUILD_TOOLS_DIR" ]; then
+  echo "Assembling APK via Android SDK aapt2 pipeline..."
+  PLATFORM_JAR="$(find "$SDK_ROOT/platforms" -name "android.jar" | sort -V | tail -n 1)"
+  AAPT2="$BUILD_TOOLS_DIR/aapt2"
+  MANIFEST="$ROOT/apps/photocraft-android/AndroidManifest.xml"
+  RES_DIR="$ROOT/apps/photocraft-android/res"
+
+  if [ -f "$PLATFORM_JAR" ] && [ -x "$AAPT2" ] && [ -f "$MANIFEST" ]; then
+    mkdir -p "$WORK/compiled_res"
+    "$AAPT2" compile --dir "$RES_DIR" -o "$WORK/compiled_res.zip" || true
+    LINK_ARGS=()
+    if [ -f "$WORK/compiled_res.zip" ]; then
+      LINK_ARGS+=("$WORK/compiled_res.zip")
     fi
-  done
-  (cd "$WORK" && zip -qr "$FINAL_APK" .)
+    "$AAPT2" link -I "$PLATFORM_JAR" --manifest "$MANIFEST" "${LINK_ARGS[@]}" -o "$WORK/base.apk"
+    
+    mkdir -p "$WORK/apk_content/lib"
+    cp -r "$JNILIBS_DIR/." "$WORK/apk_content/lib/" 2>/dev/null || true
+    (cd "$WORK/apk_content" && zip -ur "$WORK/base.apk" lib)
+    cp "$WORK/base.apk" "$FINAL_APK"
+  fi
 fi
 
 if [ ! -f "$FINAL_APK" ]; then
@@ -103,26 +115,27 @@ if [ ! -f "$FINAL_APK" ]; then
   exit 1
 fi
 
-# Locate Android build tools (apksigner and zipalign) for proper Android package signing
-SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-if [ -n "$SDK_ROOT" ] && [ -d "$SDK_ROOT/build-tools" ]; then
-  BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)"
+# 4. Sign and align APK if not already signed
+if [ -n "$BUILD_TOOLS_DIR" ]; then
   ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
   APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
 
   if [ -x "$APKSIGNER" ] && command -v keytool >/dev/null 2>&1; then
-    echo "Signing and aligning APK for Android installation..."
-    KEYSTORE="$WORK/debug.keystore"
-    keytool -genkeypair -v -keystore "$KEYSTORE" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=PhotoCraft,O=Android,C=US"
+    # Check if APK is already signed
+    if ! "$APKSIGNER" verify "$FINAL_APK" >/dev/null 2>&1; then
+      echo "Signing APK with apksigner..."
+      KEYSTORE="$WORK/debug.keystore"
+      keytool -genkeypair -v -keystore "$KEYSTORE" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=PhotoCraft,O=Android,C=US"
 
-    if [ -x "$ZIPALIGN" ]; then
-      ALIGNED_APK="$WORK/aligned.apk"
-      "$ZIPALIGN" -p -f 4 "$FINAL_APK" "$ALIGNED_APK"
-      mv "$ALIGNED_APK" "$FINAL_APK"
+      if [ -x "$ZIPALIGN" ]; then
+        ALIGNED_APK="$WORK/aligned.apk"
+        "$ZIPALIGN" -p -f 4 "$FINAL_APK" "$ALIGNED_APK"
+        mv "$ALIGNED_APK" "$FINAL_APK"
+      fi
+
+      "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android "$FINAL_APK"
     fi
-
-    "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android "$FINAL_APK"
-    echo "APK signed successfully with v1, v2 and v3 signature schemes!"
+    echo "APK verification:"
     "$APKSIGNER" verify --verbose "$FINAL_APK" || true
   fi
 fi

@@ -39,20 +39,23 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
       - name: Set up Android NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
           link-to-sdk: true
 
-      - name: Install Android SDK Platform 30
+      - name: Install Android SDK Platform 34
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-30" "build-tools;30.0.3"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android, x86_64-linux-android, armv7-linux-androideabi
+          targets: aarch64-linux-android, x86_64-linux-android
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -62,7 +65,6 @@ jobs:
       - name: Install build tools
         run: |
           cargo install cargo-ndk --locked || cargo install cargo-ndk
-          cargo install cargo-apk --locked || cargo install cargo-apk || true
 
       - name: Build Android APK
         env:
