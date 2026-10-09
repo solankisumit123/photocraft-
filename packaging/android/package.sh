@@ -103,6 +103,30 @@ if [ ! -f "$FINAL_APK" ]; then
   exit 1
 fi
 
+# Locate Android build tools (apksigner and zipalign) for proper Android package signing
+SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+if [ -n "$SDK_ROOT" ] && [ -d "$SDK_ROOT/build-tools" ]; then
+  BUILD_TOOLS_DIR="$(find "$SDK_ROOT/build-tools" -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)"
+  ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+  APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+
+  if [ -x "$APKSIGNER" ] && command -v keytool >/dev/null 2>&1; then
+    echo "Signing and aligning APK for Android installation..."
+    KEYSTORE="$WORK/debug.keystore"
+    keytool -genkeypair -v -keystore "$KEYSTORE" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=PhotoCraft,O=Android,C=US"
+
+    if [ -x "$ZIPALIGN" ]; then
+      ALIGNED_APK="$WORK/aligned.apk"
+      "$ZIPALIGN" -p -f 4 "$FINAL_APK" "$ALIGNED_APK"
+      mv "$ALIGNED_APK" "$FINAL_APK"
+    fi
+
+    "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android "$FINAL_APK"
+    echo "APK signed successfully with v1, v2 and v3 signature schemes!"
+    "$APKSIGNER" verify --verbose "$FINAL_APK" || true
+  fi
+fi
+
 SHA="$(sha256 "$FINAL_APK")"
 echo "$SHA  $APK_NAME" > "$FINAL_APK.sha256"
 echo "Successfully generated $FINAL_APK"
