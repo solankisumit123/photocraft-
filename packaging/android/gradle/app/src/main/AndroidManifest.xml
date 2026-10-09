@@ -24,6 +24,7 @@
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
             android:launchMode="singleTask"

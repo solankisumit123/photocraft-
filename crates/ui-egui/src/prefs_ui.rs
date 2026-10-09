@@ -182,6 +182,19 @@ fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
     // physical pixels avoids oscillating between 100% and 200% on successive frames.
     // logic() can receive new viewport DPI before InputState::pixels_per_point updates.
     let native_scale = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
+    #[cfg(target_os = "android")]
+    {
+        if app.session.prefs().interface.ui_scale == prefs::UiScale::Auto {
+            let screen_px = ctx.screen_rect().size() * ctx.pixels_per_point();
+            let short_edge = screen_px.x.min(screen_px.y);
+            if short_edge.is_finite() && short_edge > 200.0 {
+                // On mobile screens, scale UI so height in landscape has ~500pt available space.
+                let ideal_scale = (short_edge / 500.0).clamp(1.5, native_scale);
+                ctx.set_zoom_factor(ideal_scale / native_scale);
+                return;
+            }
+        }
+    }
     let monitor_px = ctx.input(|i| i.viewport().monitor_size).map(|s| s * (native_scale * ctx.zoom_factor()));
     let scale = display_scale(app.session.prefs().interface.ui_scale, native, monitor_px);
     ctx.set_zoom_factor(scale / native_scale);

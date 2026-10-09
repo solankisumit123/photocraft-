@@ -78,7 +78,13 @@ pub extern "C" fn android_main(app: winit::platform::android::activity::AndroidA
 
     log::info!("PhotoCraft initializing on Android (eframe + wgpu)");
 
-    let options = eframe::NativeOptions { android_app: Some(app), renderer: eframe::Renderer::Wgpu, ..Default::default() };
+    let mut options = eframe::NativeOptions {
+        android_app: Some(app),
+        renderer: eframe::Renderer::Wgpu,
+        viewport: egui::ViewportBuilder::default().with_title("PhotoCraft").with_decorations(false),
+        ..Default::default()
+    };
+    photocraft_ui_egui::gpu_canvas::use_adapter_limits(&mut options.wgpu_options.wgpu_setup);
 
     let run_result = eframe::run_native(
         "PhotoCraft",
