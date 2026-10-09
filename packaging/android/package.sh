@@ -36,17 +36,22 @@ APK_NAME="photocraft-android-$VERSION.apk"
 FINAL_APK="$DIST/$APK_NAME"
 
 if command -v cargo-apk >/dev/null 2>&1; then
-  echo "Using cargo-apk build pipeline..."
+  echo "Attempting build via cargo-apk..."
   FLAGS=()
   if [ "$BUILD_MODE" = "release" ]; then
     FLAGS+=(--release)
   fi
-  (cd "$ROOT" && cargo apk build "${FLAGS[@]}" --manifest-path "apps/photocraft-android/Cargo.toml")
-  FOUND_APK="$(find "$CARGO_TARGET_DIR" -name "*.apk" | head -n 1)"
-  if [ -n "$FOUND_APK" ] && [ -f "$FOUND_APK" ]; then
-    cp "$FOUND_APK" "$FINAL_APK"
+  if (cd "$ROOT" && cargo apk build "${FLAGS[@]}" --manifest-path "apps/photocraft-android/Cargo.toml"); then
+    FOUND_APK="$(find "$CARGO_TARGET_DIR" -name "*.apk" | head -n 1)"
+    if [ -n "$FOUND_APK" ] && [ -f "$FOUND_APK" ]; then
+      cp "$FOUND_APK" "$FINAL_APK"
+    fi
+  else
+    echo "cargo-apk build not completed, falling back to cargo-ndk..."
   fi
-elif command -v cargo-ndk >/dev/null 2>&1; then
+fi
+
+if [ ! -f "$FINAL_APK" ] && command -v cargo-ndk >/dev/null 2>&1; then
   echo "Using cargo-ndk + Gradle build pipeline..."
   GRADLE_DIR="$HERE/gradle"
   JNILIBS_DIR="$GRADLE_DIR/app/src/main/jniLibs"
